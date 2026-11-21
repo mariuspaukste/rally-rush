@@ -1,6 +1,6 @@
 # Rally Rush
 
-An original top-down arcade racing game for the browser. It's a single HTML file with no build step and no dependencies.
+An original isometric arcade racing game for the browser. It renders in 3D with WebGL (a hand-written renderer, no libraries) and falls back to a 2D canvas on devices without WebGL. It's a single HTML file with no build step and no dependencies.
 
 **Play:** https://mariuspaukste.github.io/race-mania/
 
@@ -9,6 +9,7 @@ An original top-down arcade racing game for the browser. It's a single HTML file
 - 3 AI rivals with Easy / Normal / Hard difficulty
 - 3, 5 or 8 laps, lap times, and a lap record saved per track
 - Drifting, skid marks, car collisions, and grass that slows you down
+- Isometric 3D view with lit low-poly cars, trees, tyre walls, grandstand and start gantry, plus real-time shadows
 - Minimap and a live position / lap HUD
 
 ## Controls

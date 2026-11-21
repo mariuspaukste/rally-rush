@@ -12,6 +12,7 @@
     user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   }
   canvas { display: block; position: fixed; inset: 0; touch-action: none; }
+  #c { pointer-events: none; }
   #hud {
     position: fixed; top: 10px; left: 10px; z-index: 2; pointer-events: none;
     background: rgba(0,0,0,.45); border-radius: 10px; padding: 8px 12px;
@@ -26,7 +27,7 @@
   }
   .overlay {
     position: fixed; inset: 0; z-index: 5; display: none; align-items: center; justify-content: center;
-    background: rgba(8,14,8,.72); padding: 16px; overflow-y: auto;
+    background: rgba(8,14,8,.5); padding: 16px; overflow-y: auto;
   }
   .overlay.show { display: flex; }
   .panel {
@@ -72,6 +73,7 @@
 </style>
 </head>
 <body>
+<canvas id="gl"></canvas>
 <canvas id="c"></canvas>
 <div id="hud"></div>
 <button id="pauseBtn" aria-label="Pause">II</button>
@@ -83,7 +85,7 @@
 <div class="overlay show" id="menu">
   <div class="panel">
     <h1>RALLY <span>RUSH</span></h1>
-    <p class="sub">Top-down arcade racing. Beat three rivals around the track.</p>
+    <p class="sub">Isometric arcade racing. Beat three rivals around the track.</p>
     <div class="label">Track</div>
     <div class="row" id="trackOpts"></div>
     <div class="label">Rivals</div>
@@ -368,7 +370,11 @@ function standings(race) {
     items.forEach((it, i) => {
       const b = document.createElement('div');
       render(b, it, i);
-      b.addEventListener('click', () => { settings[key] = it.value ?? i; store.set('settings', settings); buildMenu(); });
+      b.addEventListener('click', () => {
+        const before = settings.track;
+        settings[key] = it.value ?? i; store.set('settings', settings); buildMenu();
+        if (key === 'track' && settings.track !== before) startDemo();
+      });
       el.appendChild(b);
     });
   }
@@ -388,31 +394,42 @@ function standings(race) {
   }
   buildMenu();
 
-  // ---------- pre-rendered track ----------
-  let trackImg = null, trackKey = -1;
+  // ---------- colour helpers ----------
+  function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const c = [n >> 16, (n >> 8) & 255, n & 255].map(v => clamp(Math.round(f < 0 ? v * (1 + f) : v + (255 - v) * f), 0, 255));
+    return 'rgb(' + c.join(',') + ')';
+  }
   function seeded(seed) { return () => ((seed = (seed * 16807) % 2147483647) / 2147483647); }
-  function renderTrack(ti) {
+
+  // ---------- ground texture (flat, drawn under an isometric transform) ----------
+  let trackImg = null, trackKey = -1, scenery = [], beam = null;
+  function renderGround(ti) {
     const tr = built[ti], b = tr.bounds;
     const w = Math.ceil(b.x1 - b.x0), h = Math.ceil(b.y1 - b.y0);
     const oc = document.createElement('canvas'); oc.width = w; oc.height = h;
     const g = oc.getContext('2d');
     g.translate(-b.x0, -b.y0);
     const rnd = seeded(1234 + ti * 77);
-    g.fillStyle = '#4c8c3a'; g.fillRect(b.x0, b.y0, w, h);
-    for (let i = 0; i < 4500; i++) {
-      g.fillStyle = rnd() < 0.5 ? 'rgba(30,70,25,.35)' : 'rgba(120,170,80,.25)';
-      const s = 3 + rnd() * 8;
-      g.fillRect(b.x0 + rnd() * w, b.y0 + rnd() * h, s, s * 0.6);
+    g.fillStyle = '#4f9a3c'; g.fillRect(b.x0, b.y0, w, h);
+    // mown stripes
+    g.fillStyle = 'rgba(255,255,255,.035)';
+    for (let x = b.x0; x < b.x1; x += 120) g.fillRect(x, b.y0, 60, h);
+    for (let i = 0; i < 5000; i++) {
+      g.fillStyle = rnd() < 0.5 ? 'rgba(30,70,25,.3)' : 'rgba(140,190,90,.22)';
+      const s = 3 + rnd() * 7;
+      g.fillRect(b.x0 + rnd() * w, b.y0 + rnd() * h, s, s);
     }
     const path = new Path2D();
     tr.pts.forEach((p, i) => (i ? path.lineTo(p[0], p[1]) : path.moveTo(p[0], p[1])));
     path.closePath();
     g.lineJoin = 'round'; g.lineCap = 'round';
-    g.strokeStyle = 'rgba(0,0,0,.25)'; g.lineWidth = tr.width + 34; g.stroke(path);
-    g.strokeStyle = '#f2f2f2'; g.lineWidth = tr.width + 18; g.stroke(path);
+    // gravel run-off, curbs, tarmac
+    g.strokeStyle = '#c9b48a'; g.lineWidth = tr.width + 70; g.stroke(path);
+    g.strokeStyle = 'rgba(0,0,0,.08)'; g.lineWidth = tr.width + 70; g.setLineDash([3, 9]); g.stroke(path); g.setLineDash([]);
+    g.strokeStyle = '#f2f2f2'; g.lineWidth = tr.width + 20; g.stroke(path);
     g.setLineDash([22, 22]); g.strokeStyle = '#d32f2f'; g.stroke(path); g.setLineDash([]);
-    g.strokeStyle = '#5a5d60'; g.lineWidth = tr.width; g.stroke(path);
-    // tarmac grain
+    g.strokeStyle = '#5b5e62'; g.lineWidth = tr.width; g.stroke(path);
     for (let i = 0; i < tr.N; i += 2) {
       const p = tr.pts[i];
       for (let k = 0; k < 3; k++) {
@@ -422,36 +439,450 @@ function standings(race) {
         g.fillRect(p[0] + ox, p[1] + oy, 3, 3);
       }
     }
+    // racing line rubber
+    g.strokeStyle = 'rgba(0,0,0,.07)'; g.lineWidth = tr.width * 0.35; g.stroke(path);
     g.setLineDash([30, 34]); g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 4; g.stroke(path); g.setLineDash([]);
     // start / finish chequers
     const p0 = tr.pts[0], a0 = tr.ang[0];
     g.save(); g.translate(p0[0], p0[1]); g.rotate(a0);
     const sq = 10, rows = Math.ceil(tr.width / sq);
-    for (let r = 0; r < rows; r++) for (let c = 0; c < 2; c++) {
+    for (let r = 0; r < rows; r++) for (let c = 0; c < 3; c++) {
       g.fillStyle = (r + c) % 2 ? '#111' : '#fff';
-      g.fillRect(-sq + c * sq, -tr.width / 2 + r * sq, sq, Math.min(sq, tr.width - r * sq));
+      g.fillRect(-sq * 1.5 + c * sq, -tr.width / 2 + r * sq, sq, Math.min(sq, tr.width - r * sq));
     }
     g.restore();
-    // trees and bushes, kept off the track
-    const far = (x, y, m) => {
-      for (let i = 0; i < tr.N; i += 3) {
-        const p = tr.pts[i];
-        if ((p[0] - x) ** 2 + (p[1] - y) ** 2 < m * m) return false;
-      }
-      return true;
-    };
-    for (let i = 0; i < 160; i++) {
-      const x = b.x0 + rnd() * w, y = b.y0 + rnd() * h, r = 16 + rnd() * 20;
-      if (!far(x, y, tr.width / 2 + 30 + r)) continue;
-      g.fillStyle = 'rgba(0,0,0,.25)'; g.beginPath(); g.arc(x + 6, y + 7, r, 0, 7); g.fill();
-      g.fillStyle = rnd() < 0.5 ? '#2e6b2a' : '#367a2e'; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
-      g.fillStyle = 'rgba(255,255,255,.12)'; g.beginPath(); g.arc(x - r * 0.3, y - r * 0.3, r * 0.45, 0, 7); g.fill();
+    // grid boxes
+    for (let k = 0; k < 4; k++) {
+      const row = Math.floor(k / 2), col = k % 2, idx = (tr.N - 4 - row * 8) % tr.N, a = tr.ang[idx];
+      const lat = (col ? 1 : -1) * tr.width * 0.22;
+      g.save(); g.translate(tr.pts[idx][0] - Math.sin(a) * lat, tr.pts[idx][1] + Math.cos(a) * lat); g.rotate(a);
+      g.strokeStyle = 'rgba(255,255,255,.6)'; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(24, -14); g.lineTo(24, 14); g.moveTo(24, -14); g.lineTo(6, -14); g.moveTo(24, 14); g.lineTo(6, 14); g.stroke();
+      g.restore();
     }
-    // fence around the edge of the map
+    // map edge
     g.strokeStyle = '#6d4c2f'; g.lineWidth = 8; g.strokeRect(b.x0 + 4, b.y0 + 4, w - 8, h - 8);
-    g.setLineDash([4, 26]); g.strokeStyle = '#3e2a19'; g.lineWidth = 14; g.strokeRect(b.x0 + 4, b.y0 + 4, w - 8, h - 8); g.setLineDash([]);
     return oc;
   }
+
+  // ---------- 3D scenery ----------
+  function rectC(cx, cy, tx, ty, hl, hw) {
+    const nx = -ty, ny = tx;
+    return [[cx - tx * hl - nx * hw, cy - ty * hl - ny * hw], [cx + tx * hl - nx * hw, cy + ty * hl - ny * hw],
+            [cx + tx * hl + nx * hw, cy + ty * hl + ny * hw], [cx - tx * hl + nx * hw, cy - ty * hl + ny * hw]];
+  }
+  function buildScenery(ti) {
+    const tr = built[ti], b = tr.bounds, rnd = seeded(999 + ti * 31), out = [], hw = tr.width / 2;
+    const clearOf = (x, y, m) => {
+      for (let i = 0; i < tr.N; i += 2) { const p = tr.pts[i]; if ((p[0] - x) ** 2 + (p[1] - y) ** 2 < m * m) return false; }
+      return true;
+    };
+    const blocked = [];
+    const freeOfObjects = (x, y, m) => blocked.every(o => (o[0] - x) ** 2 + (o[1] - y) ** 2 > (o[2] + m) ** 2);
+
+    // start gantry
+    const p0 = tr.pts[0], a0 = tr.ang[0], tx = Math.cos(a0), ty = Math.sin(a0), nx = -ty, ny = tx;
+    const pil = [];
+    for (const s of [-1, 1]) {
+      const cx = p0[0] + nx * s * (hw + 18), cy = p0[1] + ny * s * (hw + 18);
+      out.push({ x: cx, y: cy, parts: [{ c: rectC(cx, cy, tx, ty, 6, 6), z0: 0, z1: 64, col: '#cfd4da' }] });
+      pil.push([cx, cy]); blocked.push([cx, cy, 20]);
+    }
+    beam = { parts: [{ c: [[pil[0][0] - tx * 2, pil[0][1] - ty * 2], [pil[0][0] + tx * 2, pil[0][1] + ty * 2],
+                            [pil[1][0] + tx * 2, pil[1][1] + ty * 2], [pil[1][0] - tx * 2, pil[1][1] - ty * 2]],
+                      z0: 44, z1: 62, col: '#151515', top: '#333333', checker: true }], pil, t: [tx, ty] };
+
+    // grandstand on the straightest bit of track, on whichever side has room
+    let bestI = -1, bestT = 9;
+    for (let i = 0; i < tr.N; i++) {
+      const t = Math.max(tr.turn[i], tr.turn[(i - 15 + tr.N) % tr.N]);
+      if (t < bestT && Math.abs(i - 0) > 25 && Math.abs(i - tr.N) > 25) { bestT = t; bestI = i; }
+    }
+    if (bestI >= 0) {
+      const a = tr.ang[bestI], ux = Math.cos(a), uy = Math.sin(a), vx = -uy, vy = ux, c = tr.pts[bestI];
+      for (const s of [1, -1]) {
+        const parts = [], dots = [];
+        let ok = true;
+        for (let step = 0; step < 3 && ok; step++) {
+          const off = hw + 58 + step * 22, cx = c[0] + vx * s * off, cy = c[1] + vy * s * off;
+          for (const k of [-1, -0.5, 0, 0.5, 1]) if (!clearOf(cx + ux * 140 * k, cy + uy * 140 * k, hw + 40)) ok = false;
+          parts.push({ c: rectC(cx, cy, ux, uy, 140, 11), z0: 0, z1: 10 + step * 10, col: '#9aa3ad', top: '#b8c0c8' });
+          for (let d = 0; d < 26; d++) {
+            const along = (rnd() - 0.5) * 270, across = (rnd() - 0.5) * 14;
+            dots.push([cx + ux * along + vx * across, cy + uy * along + vy * across, 10 + step * 10,
+              ['#e53935', '#1e88e5', '#fdd835', '#ffffff', '#43a047', '#fb8c00'][Math.floor(rnd() * 6)]]);
+          }
+        }
+        if (!ok) continue;
+        const off = hw + 58 + 3 * 22, cx = c[0] + vx * s * off, cy = c[1] + vy * s * off;
+        parts.push({ c: rectC(cx, cy, ux, uy, 140, 5), z0: 0, z1: 52, col: '#7b8794', top: '#2e7d32' });
+        const mx = c[0] + vx * s * (hw + 80), my = c[1] + vy * s * (hw + 80);
+        out.push({ x: mx, y: my, parts, dots, big: true });
+        blocked.push([mx, my, 170]);
+        break;
+      }
+    }
+
+    // tyre walls round the outside of tight corners
+    for (let i = 0; i < tr.N; i += 2) {
+      if (tr.turn[(i - 8 + tr.N) % tr.N] < 1.0) continue;
+      const dir = wrapA(tr.ang[(i + 6) % tr.N] - tr.ang[(i - 6 + tr.N) % tr.N]);
+      const s = dir > 0 ? -1 : 1, a = tr.ang[i];
+      const x = tr.pts[i][0] - Math.sin(a) * s * (hw + 44), y = tr.pts[i][1] + Math.cos(a) * s * (hw + 44);
+      if (!clearOf(x, y, hw + 38) || !freeOfObjects(x, y, 10)) continue;
+      out.push({ x, y, tyres: true, col: (i >> 1) % 2 ? '#d32f2f' : '#f5f5f5' });
+      blocked.push([x, y, 7]);
+    }
+
+    // trees
+    for (let i = 0; i < 260; i++) {
+      const x = b.x0 + 30 + rnd() * (b.x1 - b.x0 - 60), y = b.y0 + 30 + rnd() * (b.y1 - b.y0 - 60), r = 14 + rnd() * 14;
+      if (!clearOf(x, y, hw + 60 + r) || !freeOfObjects(x, y, r)) continue;
+      out.push({ x, y, tree: true, r, h: r * 2.4 + 12, pine: rnd() < 0.4, tone: rnd() });
+      blocked.push([x, y, r * 0.8]);
+    }
+    return out;
+  }
+
+  // ---------- WebGL renderer ----------
+  // World mapping: sim (x, y) -> GL (X = x, Z = y), height -> Y.
+  function createGL(canvas) {
+    let gl = null, gl2 = false;
+    const attrs = { antialias: true, stencil: true, alpha: false };
+    try {
+      gl = canvas.getContext('webgl2', attrs); gl2 = !!gl;
+      if (!gl) gl = canvas.getContext('webgl', attrs) || canvas.getContext('experimental-webgl', attrs);
+    } catch (e) { gl = null; }
+    if (!gl) return null;
+
+    function program(vs, fs) {
+      const mk = (type, src) => {
+        const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+        return s;
+      };
+      const p = gl.createProgram();
+      gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      const u = {}, a = {};
+      const nu = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+      for (let i = 0; i < nu; i++) { const n = gl.getActiveUniform(p, i).name; u[n] = gl.getUniformLocation(p, n); }
+      const na = gl.getProgramParameter(p, gl.ACTIVE_ATTRIBUTES);
+      for (let i = 0; i < na; i++) { const n = gl.getActiveAttrib(p, i).name; a[n] = gl.getAttribLocation(p, n); }
+      return { p, u, a };
+    }
+    let lit, grd, flat;
+    try {
+      lit = program(`
+        attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol;
+        uniform mat4 uVP; uniform mat4 uM; uniform vec3 uL; uniform float uShadow;
+        varying vec4 vCol;
+        void main() {
+          vec4 w = uM * vec4(aPos, 1.0);
+          if (uShadow > 0.5) {
+            w.xz -= uL.xz * (w.y / uL.y); w.y = 0.3; vCol = vec4(0.0, 0.0, 0.0, 0.3);
+          } else {
+            vec3 n = normalize((uM * vec4(aNrm, 0.0)).xyz);
+            float d = max(dot(n, uL), 0.0);
+            vCol = vec4(aCol * (0.5 + 0.58 * d + 0.08 * n.y), 1.0);
+          }
+          gl_Position = uVP * w;
+        }`, `
+        precision mediump float; varying vec4 vCol;
+        void main() { gl_FragColor = vCol; }`);
+      grd = program(`
+        attribute vec2 aXZ; uniform mat4 uVP; uniform vec4 uB; varying vec2 vUV;
+        void main() { vUV = (aXZ - uB.xy) / uB.zw; gl_Position = uVP * vec4(aXZ.x, 0.0, aXZ.y, 1.0); }`, `
+        precision mediump float; uniform sampler2D uTex; varying vec2 vUV;
+        void main() { gl_FragColor = vec4(texture2D(uTex, vUV).rgb, 1.0); }`);
+      flat = program(`
+        attribute vec2 aXZ; uniform mat4 uVP; uniform float uY;
+        void main() { gl_Position = uVP * vec4(aXZ.x, uY, aXZ.y, 1.0); }`, `
+        precision mediump float; uniform vec4 uC;
+        void main() { gl_FragColor = uC; }`);
+    } catch (e) { console.warn('WebGL shaders failed, using 2D', e); return null; }
+
+    // ---- matrices (column-major) ----
+    const I4 = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    function mul(a, b) {
+      const o = new Float32Array(16);
+      for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+        let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s;
+      }
+      return o;
+    }
+    const norm = v => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    function lookAt(e, t, u) {
+      const z = norm([e[0] - t[0], e[1] - t[1], e[2] - t[2]]), x = norm(cross(u, z)), y = cross(z, x);
+      return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1]);
+    }
+    function ortho(l, r, b, t, n, f) {
+      return new Float32Array([2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0,
+        -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1]);
+    }
+    // camera: looking down at 30 degrees from the +x/+z diagonal (classic 2:1 isometric)
+    const EL = Math.PI / 6, VIEW = [Math.cos(EL) * Math.SQRT1_2, Math.sin(EL), Math.cos(EL) * Math.SQRT1_2];
+    const LIGHT = norm([-0.75, 1.15, -0.2]);
+
+    // ---- mesh building ----
+    const rgb = hex => { const n = parseInt(hex.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; };
+    const tint = (c, f) => [Math.min(1, c[0] * f), Math.min(1, c[1] * f), Math.min(1, c[2] * f)];
+    function face(d, pts, col, inside) {
+      let nx = 0, ny = 0, nz = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        nx += (a[1] - b[1]) * (a[2] + b[2]); ny += (a[2] - b[2]) * (a[0] + b[0]); nz += (a[0] - b[0]) * (a[1] + b[1]);
+      }
+      let n = norm([nx, ny, nz]);
+      if (inside) {
+        const c = [0, 0, 0]; pts.forEach(p => { c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; });
+        c[0] /= pts.length; c[1] /= pts.length; c[2] /= pts.length;
+        if (dot(n, [c[0] - inside[0], c[1] - inside[1], c[2] - inside[2]]) < 0) n = [-n[0], -n[1], -n[2]];
+      }
+      for (let i = 1; i < pts.length - 1; i++)
+        for (const p of [pts[0], pts[i], pts[i + 1]]) d.push(p[0], p[1], p[2], n[0], n[1], n[2], col[0], col[1], col[2]);
+    }
+    // corners: [[x, z] x4]
+    function prism(d, cs, y0, y1, col, top) {
+      const cx = (cs[0][0] + cs[1][0] + cs[2][0] + cs[3][0]) / 4, cz = (cs[0][1] + cs[1][1] + cs[2][1] + cs[3][1]) / 4;
+      const inside = [cx, (y0 + y1) / 2, cz];
+      for (let i = 0; i < 4; i++) {
+        const a = cs[i], b = cs[(i + 1) % 4];
+        face(d, [[a[0], y0, a[1]], [b[0], y0, b[1]], [b[0], y1, b[1]], [a[0], y1, a[1]]], col, inside);
+      }
+      face(d, cs.map(c => [c[0], y1, c[1]]), top || col, inside);
+    }
+    const box = (d, x0, x1, y0, y1, z0, z1, col, top) => prism(d, [[x0, z0], [x1, z0], [x1, z1], [x0, z1]], y0, y1, col, top);
+    function cylY(d, cx, cz, r, y0, y1, seg, col, top) {
+      const ring = []; for (let i = 0; i < seg; i++) { const t = i / seg * Math.PI * 2; ring.push([cx + Math.cos(t) * r, cz + Math.sin(t) * r]); }
+      const inside = [cx, (y0 + y1) / 2, cz];
+      for (let i = 0; i < seg; i++) {
+        const a = ring[i], b = ring[(i + 1) % seg];
+        face(d, [[a[0], y0, a[1]], [b[0], y0, b[1]], [b[0], y1, b[1]], [a[0], y1, a[1]]], col, inside);
+      }
+      face(d, ring.map(p => [p[0], y1, p[1]]), top || col, inside);
+    }
+    function cylZ(d, cx, cy, r, z0, z1, seg, col, cap) {
+      const ring = []; for (let i = 0; i < seg; i++) { const t = i / seg * Math.PI * 2; ring.push([cx + Math.cos(t) * r, cy + Math.sin(t) * r]); }
+      const inside = [cx, cy, (z0 + z1) / 2];
+      for (let i = 0; i < seg; i++) {
+        const a = ring[i], b = ring[(i + 1) % seg];
+        face(d, [[a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1]], col, inside);
+      }
+      face(d, ring.map(p => [p[0], p[1], z0]), cap || col, inside);
+      face(d, ring.map(p => [p[0], p[1], z1]), cap || col, inside);
+    }
+    function cone(d, cx, cz, r, yb, ya, seg, col, rnd) {
+      const inside = [cx, (yb + ya) / 2, cz];
+      for (let i = 0; i < seg; i++) {
+        const t0 = i / seg * Math.PI * 2, t1 = (i + 1) / seg * Math.PI * 2;
+        const c = rnd ? tint(col, 0.9 + rnd() * 0.2) : col;
+        face(d, [[cx + Math.cos(t0) * r, yb, cz + Math.sin(t0) * r], [cx + Math.cos(t1) * r, yb, cz + Math.sin(t1) * r], [cx, ya, cz]], c, inside);
+      }
+    }
+    function blob(d, cx, cy, cz, rx, ry, rz, seg, rings, col, rnd) {
+      const pt = (i, j) => {
+        const la = -Math.PI / 2 + Math.PI * i / rings, lo = Math.PI * 2 * j / seg;
+        return [cx + Math.cos(la) * Math.cos(lo) * rx, cy + Math.sin(la) * ry, cz + Math.cos(la) * Math.sin(lo) * rz];
+      };
+      for (let i = 0; i < rings; i++) for (let j = 0; j < seg; j++) {
+        const q = [pt(i, j), pt(i, j + 1), pt(i + 1, j + 1), pt(i + 1, j)];
+        const pts = i === 0 ? [q[0], q[2], q[3]] : i === rings - 1 ? [q[0], q[1], q[2]] : q;
+        face(d, pts, tint(col, 0.88 + rnd() * 0.24), [cx, cy, cz]);
+      }
+    }
+    function upload(d) {
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d), gl.STATIC_DRAW);
+      return { buf, n: d.length / 9 };
+    }
+
+    function carMesh(hex) {
+      const d = [], c = rgb(hex), dark = [0.1, 0.1, 0.11], glass = [0.16, 0.25, 0.34], white = [0.95, 0.95, 0.95];
+      box(d, -18, 18, 3, 10, -9, 9, c);
+      box(d, -16, 14, 10, 10.6, -8.6, 8.6, tint(c, 1.05));
+      box(d, 6, 18, 10.6, 10.9, -2, 2, white); box(d, -18, -10, 10.6, 10.9, -2, 2, white);
+      prism(d, [[-10, -7.5], [4, -7.5], [4, 7.5], [-10, 7.5]], 10.6, 17, glass, tint(c, 1.12));
+      box(d, 18, 18.7, 6, 8.5, -8, -4.5, [1, 0.96, 0.6]); box(d, 18, 18.7, 6, 8.5, 4.5, 8, [1, 0.96, 0.6]);
+      box(d, -18.7, -18, 6, 8.5, -8, -4.5, [0.85, 0.08, 0.08]); box(d, -18.7, -18, 6, 8.5, 4.5, 8, [0.85, 0.08, 0.08]);
+      box(d, -19.5, -15.5, 14, 15.5, -9.5, 9.5, dark); box(d, -18, -17, 10, 14, -6, -5, dark); box(d, -18, -17, 10, 14, 5, 6, dark);
+      for (const x of [-11, 10]) for (const s of [-1, 1]) {
+        const z0 = s > 0 ? 7.8 : -11.8, z1 = s > 0 ? 11.8 : -7.8;
+        cylZ(d, x, 4.6, 4.6, z0, z1, 10, dark, [0.18, 0.18, 0.2]);
+        cylZ(d, x, 4.6, 2.0, s > 0 ? z1 : z0 - 0.3, s > 0 ? z1 + 0.3 : z0, 8, [0.75, 0.76, 0.78]);
+      }
+      return upload(d);
+    }
+    const marker = (() => { const d = []; cone(d, 0, 0, 6, 46, 34, 4, rgb('#ffcc33')); return upload(d); })();
+
+    function sceneryMesh(tr, scenery, beam) {
+      const d = [], rnd = seeded(4242), b = tr.bounds, brown = rgb('#6d4c2f');
+      box(d, b.x0, b.x1, 0, 7, b.y0, b.y0 + 6, brown); box(d, b.x0, b.x1, 0, 7, b.y1 - 6, b.y1, brown);
+      box(d, b.x0, b.x0 + 6, 0, 7, b.y0, b.y1, brown); box(d, b.x1 - 6, b.x1, 0, 7, b.y0, b.y1, brown);
+      for (const o of scenery) {
+        if (o.tree) {
+          cylY(d, o.x, o.y, 2.8, 0, o.h * 0.55, 6, rgb('#5d4037'));
+          if (o.pine) {
+            const base = rgb('#2f6b35');
+            for (const [k0, k1] of [[0.2, 1.0], [0.45, 0.78], [0.68, 0.52]]) cone(d, o.x, o.y, o.r * k1, o.h * k0, o.h * (k0 + 0.42), 7, base, rnd);
+          } else {
+            const base = rgb(o.tone < 0.5 ? '#3f8a30' : '#55962e');
+            blob(d, o.x, o.h * 0.62, o.y, o.r, o.r * 0.85, o.r, 7, 5, base, rnd);
+            blob(d, o.x + o.r * 0.2, o.h * 0.9, o.y - o.r * 0.2, o.r * 0.6, o.r * 0.5, o.r * 0.6, 6, 4, tint(base, 1.12), rnd);
+          }
+        } else if (o.tyres) {
+          for (let k = 0; k < 3; k++) {
+            const c = k % 2 ? [0.1, 0.1, 0.1] : rgb(o.col);
+            cylY(d, o.x, o.y, 7.5, k * 4.5, k * 4.5 + 4.5, 10, c, k === 2 ? [0.06, 0.06, 0.06] : c);
+          }
+        } else {
+          for (const p of o.parts) prism(d, p.c, p.z0, p.z1, rgb(p.col), p.top ? rgb(p.top) : null);
+          if (o.dots) for (const dt of o.dots) {
+            const h = 3 + rnd() * 3;
+            box(d, dt[0] - 1.6, dt[0] + 1.6, dt[2], dt[2] + h, dt[1] - 1.6, dt[1] + 1.6, rgb(dt[3]));
+          }
+        }
+      }
+      if (beam && beam.pil) {
+        const [p0, p1] = beam.pil, [tx, ty] = beam.t, n = 14;
+        for (let k = 0; k < n; k++) for (let r = 0; r < 2; r++) {
+          const a = [p0[0] + (p1[0] - p0[0]) * k / n, p0[1] + (p1[1] - p0[1]) * k / n];
+          const e = [p0[0] + (p1[0] - p0[0]) * (k + 1) / n, p0[1] + (p1[1] - p0[1]) * (k + 1) / n];
+          const col = (k + r) % 2 ? [0.08, 0.08, 0.08] : [0.95, 0.95, 0.95];
+          prism(d, [[a[0] - tx * 2, a[1] - ty * 2], [e[0] - tx * 2, e[1] - ty * 2], [e[0] + tx * 2, e[1] + ty * 2], [a[0] + tx * 2, a[1] + ty * 2]],
+            44 + r * 9, 53 + r * 9, col);
+        }
+        prism(d, [[p0[0] - tx * 3, p0[1] - ty * 3], [p1[0] - tx * 3, p1[1] - ty * 3], [p1[0] + tx * 3, p1[1] + ty * 3], [p0[0] + tx * 3, p0[1] + ty * 3]],
+          62, 66, rgb('#c62828'));
+      }
+      return upload(d);
+    }
+
+    // ---- ground ----
+    let groundTex = null, groundBuf = null, groundB = null, staticMesh = null, outer = null;
+    const aniso = gl.getExtension('EXT_texture_filter_anisotropic') || gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+    function setTrack(tr, img, scenery, beam) {
+      if (groundTex) gl.deleteTexture(groundTex);
+      groundTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, groundTex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      if (gl2) { gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); }
+      else gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+      const b = tr.bounds; groundB = [b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0];
+      if (!groundBuf) groundBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, groundBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([b.x0, b.y0, b.x1, b.y0, b.x1, b.y1, b.x0, b.y0, b.x1, b.y1, b.x0, b.y1]), gl.STATIC_DRAW);
+      if (staticMesh) gl.deleteBuffer(staticMesh.buf);
+      staticMesh = sceneryMesh(tr, scenery, beam);
+      if (!outer) { const d = []; face(d, [[-1e5, -0.5, -1e5], [1e5, -0.5, -1e5], [1e5, -0.5, 1e5], [-1e5, -0.5, 1e5]], rgb('#2b5424'), [0, -10, 0]); outer = upload(d); }
+    }
+    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+
+    // ---- skid marks: ring buffer of small quads ----
+    const SKMAX = 5000, skData = new Float32Array(SKMAX * 12), skBuf = gl.createBuffer();
+    let skHead = 0, skCount = 0, skDirty = false;
+    gl.bindBuffer(gl.ARRAY_BUFFER, skBuf); gl.bufferData(gl.ARRAY_BUFFER, skData.byteLength, gl.DYNAMIC_DRAW);
+    function addSkids(list) {
+      for (const s of list) {
+        const ca = Math.cos(s[2]) * 2.6, sa = Math.sin(s[2]) * 2.6, x = s[0], y = s[1];
+        const q = [x - ca + sa, y - sa - ca, x + ca + sa, y + sa - ca, x + ca - sa, y + sa + ca, x - ca - sa, y - sa + ca];
+        skData.set([q[0], q[1], q[2], q[3], q[4], q[5], q[0], q[1], q[4], q[5], q[6], q[7]], skHead * 12);
+        skHead = (skHead + 1) % SKMAX; skCount = Math.min(SKMAX, skCount + 1); skDirty = true;
+      }
+    }
+    function resetSkids() { skHead = 0; skCount = 0; }
+
+    // ---- drawing ----
+    function bindLit(mesh) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buf);
+      gl.enableVertexAttribArray(lit.a.aPos); gl.vertexAttribPointer(lit.a.aPos, 3, gl.FLOAT, false, 36, 0);
+      gl.enableVertexAttribArray(lit.a.aNrm); gl.vertexAttribPointer(lit.a.aNrm, 3, gl.FLOAT, false, 36, 12);
+      gl.enableVertexAttribArray(lit.a.aCol); gl.vertexAttribPointer(lit.a.aCol, 3, gl.FLOAT, false, 36, 24);
+    }
+    function drawLit(mesh, M) { bindLit(mesh); gl.uniformMatrix4fv(lit.u.uM, false, M); gl.drawArrays(gl.TRIANGLES, 0, mesh.n); }
+    const carCache = {};
+    function carModel(c, lift) {
+      const ca = Math.cos(c.a), sa = Math.sin(c.a);
+      return new Float32Array([ca, 0, sa, 0, 0, 1, 0, 0, -sa, 0, ca, 0, c.x, lift || 0, c.y, 1]);
+    }
+    function render(race, cam, zoom, W, H, DPR, showMarker) {
+      const cw = Math.round(W * DPR), ch = Math.round(H * DPR);
+      if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+      canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+      gl.viewport(0, 0, cw, ch);
+      gl.clearColor(0.17, 0.33, 0.14, 1); gl.clearStencil(0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+      const D = 2500, eye = [cam.x + VIEW[0] * D, VIEW[1] * D, cam.y + VIEW[2] * D];
+      const hw = W / 2 / zoom, hh = H / 2 / zoom;
+      const VP = mul(ortho(-hw, hw, -hh, hh, 10, 6000), lookAt(eye, [cam.x, 0, cam.y], [0, 1, 0]));
+      gl.disable(gl.CULL_FACE);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true);
+      gl.disable(gl.BLEND); gl.disable(gl.STENCIL_TEST);
+
+      gl.useProgram(lit.p);
+      gl.uniformMatrix4fv(lit.u.uVP, false, VP); gl.uniform3fv(lit.u.uL, LIGHT); gl.uniform1f(lit.u.uShadow, 0);
+      drawLit(outer, I4);
+
+      for (const k in lit.a) gl.disableVertexAttribArray(lit.a[k]);
+      // ground
+      gl.useProgram(grd.p);
+      gl.uniformMatrix4fv(grd.u.uVP, false, VP); gl.uniform4fv(grd.u.uB, groundB);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, groundTex); gl.uniform1i(grd.u.uTex, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, groundBuf);
+      gl.enableVertexAttribArray(grd.a.aXZ); gl.vertexAttribPointer(grd.a.aXZ, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.disableVertexAttribArray(grd.a.aXZ);
+
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.disable(gl.DEPTH_TEST);
+      // skid marks
+      if (skCount) {
+        gl.useProgram(flat.p);
+        gl.uniformMatrix4fv(flat.u.uVP, false, VP); gl.uniform1f(flat.u.uY, 0.15); gl.uniform4fv(flat.u.uC, [0.08, 0.08, 0.08, 0.22]);
+        gl.bindBuffer(gl.ARRAY_BUFFER, skBuf);
+        if (skDirty) { gl.bufferSubData(gl.ARRAY_BUFFER, 0, skData); skDirty = false; }
+        gl.enableVertexAttribArray(flat.a.aXZ); gl.vertexAttribPointer(flat.a.aXZ, 2, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, skCount * 6);
+        gl.disableVertexAttribArray(flat.a.aXZ);
+      }
+      // planar shadows, each pixel darkened once via the stencil buffer
+      gl.useProgram(lit.p);
+      gl.enable(gl.STENCIL_TEST); gl.stencilFunc(gl.EQUAL, 0, 0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
+      gl.uniform1f(lit.u.uShadow, 1);
+      drawLit(staticMesh, I4);
+      for (const c of race.cars) {
+        const m = carCache[c.color] || (carCache[c.color] = carMesh(c.color));
+        drawLit(m, carModel(c));
+      }
+      gl.disable(gl.STENCIL_TEST); gl.disable(gl.BLEND);
+
+      // solid objects
+      gl.enable(gl.DEPTH_TEST);
+      gl.uniform1f(lit.u.uShadow, 0);
+      drawLit(staticMesh, I4);
+      for (const c of race.cars) drawLit(carCache[c.color], carModel(c));
+      if (showMarker) {
+        const me = race.cars.find(c => c.isPlayer);
+        const bob = Math.sin(performance.now() / 200) * 2;
+        drawLit(marker, new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, me.x, bob, me.y, 1]));
+      }
+    }
+    return { setTrack, render, addSkids, resetSkids, maxTex, isGL2: gl2 };
+  }
+
+  const glCanvas = $('gl');
+  let GLR = null;
+  try { if (!/[?&]2d\b/.test(location.search)) GLR = createGL(glCanvas); } catch (e) { console.warn('WebGL unavailable, using 2D', e); GLR = null; }
+  if (GLR && built.some(t => Math.max(t.bounds.x1 - t.bounds.x0, t.bounds.y1 - t.bounds.y0) > GLR.maxTex)) GLR = null;
+  if (!GLR) glCanvas.style.display = 'none';
 
   // ---------- input ----------
   const keys = {};
@@ -459,7 +890,7 @@ function standings(race) {
   window.addEventListener('keydown', e => {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
     keys[e.key.toLowerCase()] = true;
-    if ((e.key === 'Escape' || e.key.toLowerCase() === 'p') && race && mode === 'race') togglePause();
+    if ((e.key === 'Escape' || e.key.toLowerCase() === 'p') && mode === 'race') togglePause();
   });
   window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
   window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -486,10 +917,22 @@ function standings(race) {
   // ---------- game flow ----------
   let race = null, mode = 'menu', paused = false, cam = { x: 0, y: 0 }, resultsShown = false, resTimer = 0;
   function show(id, on) { $(id).classList.toggle('show', on); }
+  function loadTrack(ti) {
+    if (trackKey !== ti) {
+      trackImg = renderGround(ti); scenery = buildScenery(ti); trackKey = ti;
+      if (GLR) GLR.setTrack(built[ti], trackImg, scenery, beam);
+    }
+    if (GLR) GLR.resetSkids();
+  }
+  function startDemo() {
+    loadTrack(settings.track);
+    race = makeRace(built[settings.track], { laps: 99, diff: 2, color: settings.color, autoPlayer: true });
+    race.state = 'racing';
+    const me = race.cars.find(c => c.isPlayer); cam.x = me.x; cam.y = me.y;
+  }
   function startRace() {
-    const ti = settings.track;
-    if (trackKey !== ti) { trackImg = renderTrack(ti); trackKey = ti; }
-    race = makeRace(built[ti], { laps: settings.laps, diff: settings.diff, color: settings.color });
+    loadTrack(settings.track);
+    race = makeRace(built[settings.track], { laps: settings.laps, diff: settings.diff, color: settings.color });
     const me = race.cars.find(c => c.isPlayer);
     cam.x = me.x; cam.y = me.y;
     mode = 'race'; paused = false; resultsShown = false; resTimer = 0;
@@ -498,7 +941,7 @@ function standings(race) {
     $('touch').style.display = isTouch ? 'flex' : 'none';
   }
   function toMenu() {
-    mode = 'menu'; race = null; buildMenu();
+    mode = 'menu'; paused = false; buildMenu(); startDemo();
     show('pause', false); show('results', false); show('menu', true);
     hud.style.display = 'none'; $('pauseBtn').style.display = 'none'; $('touch').style.display = 'none';
   }
@@ -539,40 +982,152 @@ function standings(race) {
     $('resNote').textContent = race.note;
   }
 
-  // ---------- drawing ----------
-  function roundRect(g, x, y, w, h, r) {
-    g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
-    g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+  // ---------- isometric drawing ----------
+  const ISO = 0.5, C = Math.SQRT1_2, HS = 0.85;
+  let zoom = 1;
+  // world (x, y, height) -> screen
+  function P(x, y, h) {
+    const dx = x - cam.x, dy = y - cam.y;
+    return [W / 2 + (dx - dy) * C * zoom, H / 2 + ((dx + dy) * C * ISO - h * HS) * zoom];
   }
-  function shade(hex, f) {
-    const n = parseInt(hex.slice(1), 16);
-    const c = [n >> 16, (n >> 8) & 255, n & 255].map(v => clamp(Math.round(f < 0 ? v * (1 + f) : v + (255 - v) * f), 0, 255));
-    return 'rgb(' + c.join(',') + ')';
+  const depth = (x, y) => (x - cam.x) + (y - cam.y);
+  function poly(g, pts) {
+    g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+    g.closePath(); g.fill();
   }
-  function drawCar(g, c) {
-    g.save(); g.translate(c.x, c.y); g.rotate(c.a);
-    g.fillStyle = 'rgba(0,0,0,.35)'; roundRect(g, -16, -8, 34, 20, 6); g.fill();
-    g.fillStyle = '#111';
-    [[-13, -11], [7, -11], [-13, 7], [7, 7]].forEach(([x, y]) => { g.fillRect(x, y, 9, 4); });
-    g.fillStyle = c.color; roundRect(g, -18, -10, 36, 20, 6); g.fill();
-    g.fillStyle = shade(c.color, -0.35); roundRect(g, -9, -7, 15, 14, 3); g.fill();
-    g.fillStyle = 'rgba(160,210,255,.85)'; roundRect(g, 4, -7, 6, 14, 2); g.fill();
-    g.fillStyle = 'rgba(160,210,255,.6)'; g.fillRect(-12, -6, 3, 12);
-    g.fillStyle = shade(c.color, 0.35); g.fillRect(-7, -5, 11, 3);
-    g.fillStyle = '#fff59d'; g.fillRect(16, -8, 2, 4); g.fillRect(16, 4, 2, 4);
-    g.restore();
+  // an extruded quad; only the faces turned towards the viewer are drawn
+  function box(g, part) {
+    const c = part.c, B = c.map(p => P(p[0], p[1], part.z0)), T = c.map(p => P(p[0], p[1], part.z1));
+    const mx = (c[0][0] + c[1][0] + c[2][0] + c[3][0]) / 4, my = (c[0][1] + c[1][1] + c[2][1] + c[3][1]) / 4;
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      let nx = c[j][1] - c[i][1], ny = -(c[j][0] - c[i][0]);
+      const fx = (c[i][0] + c[j][0]) / 2 - mx, fy = (c[i][1] + c[j][1]) / 2 - my;
+      if (nx * fx + ny * fy < 0) { nx = -nx; ny = -ny; }
+      const len = Math.hypot(nx, ny) || 1; nx /= len; ny /= len;
+      if (nx + ny <= 0) continue; // facing away
+      const light = (-nx * 0.8 - ny * 0.6 + 1) / 2; // light from the upper left of the screen
+      g.fillStyle = part.side || shade(part.col, -0.42 + light * 0.36);
+      poly(g, [B[i], B[j], T[j], T[i]]);
+      if (part.checker && Math.hypot(c[j][0] - c[i][0], c[j][1] - c[i][1]) > 40) {
+        const n = 14, lerp = (a, b2, t) => [a[0] + (b2[0] - a[0]) * t, a[1] + (b2[1] - a[1]) * t];
+        for (let k = 0; k < n; k++) for (let r = 0; r < 2; r++) {
+          if ((k + r) % 2) continue;
+          const t0 = k / n, t1 = (k + 1) / n;
+          const lo0 = lerp(B[i], T[i], r / 2), lo1 = lerp(B[j], T[j], r / 2), hi0 = lerp(B[i], T[i], (r + 1) / 2), hi1 = lerp(B[j], T[j], (r + 1) / 2);
+          g.fillStyle = light > 0.5 ? '#f4f4f4' : '#cfcfcf';
+          poly(g, [lerp(lo0, lo1, t0), lerp(lo0, lo1, t1), lerp(hi0, hi1, t1), lerp(hi0, hi1, t0)]);
+        }
+      }
+    }
+    g.fillStyle = part.top || shade(part.col, 0.1);
+    poly(g, T);
+  }
+  function drawParts(g, o) {
+    const parts = o.parts.slice().sort((a, b) => {
+      const da = depth((a.c[0][0] + a.c[2][0]) / 2, (a.c[0][1] + a.c[2][1]) / 2);
+      const db = depth((b.c[0][0] + b.c[2][0]) / 2, (b.c[0][1] + b.c[2][1]) / 2);
+      return da - db;
+    });
+    for (const p of parts) box(g, p);
+    if (o.dots) for (const d of o.dots) {
+      const s = P(d[0], d[1], d[2] + 2);
+      g.fillStyle = d[3]; g.fillRect(s[0] - 1.6 * zoom, s[1] - 2.6 * zoom, 3.2 * zoom, 3.2 * zoom);
+    }
+  }
+  function drawTree(g, o) {
+    const s = P(o.x, o.y, 0), sh = P(o.x + o.r * 0.9, o.y + o.r * 0.2, 0);
+    g.fillStyle = 'rgba(0,0,0,.22)';
+    g.beginPath(); g.ellipse(sh[0], sh[1], o.r * zoom * 1.1, o.r * zoom * 1.1 * ISO, 0, 0, 7); g.fill();
+    const top = P(o.x, o.y, o.h * 0.5);
+    g.fillStyle = '#5d4037'; g.fillRect(s[0] - 2.5 * zoom, top[1], 5 * zoom, s[1] - top[1]);
+    const base = o.pine ? '#2f6b35' : (o.tone < 0.5 ? '#3a7d2c' : '#4a8a2a');
+    if (o.pine) {
+      for (const [k0, k1] of [[0.25, 1], [0.5, 0.75], [0.72, 0.5]]) {
+        const b0 = P(o.x, o.y, o.h * k0), t0 = P(o.x, o.y, o.h * (k0 + 0.42)), rw = o.r * zoom * k1;
+        g.fillStyle = shade(base, -0.15); poly(g, [[b0[0] - rw, b0[1]], [t0[0], t0[1]], [b0[0], b0[1] + rw * 0.25]]);
+        g.fillStyle = shade(base, 0.08); poly(g, [[b0[0] + rw, b0[1]], [t0[0], t0[1]], [b0[0], b0[1] + rw * 0.25]]);
+      }
+    } else {
+      for (const [k0, k1, f] of [[0.55, 1, -0.2], [0.75, 0.8, 0], [0.92, 0.5, 0.15]]) {
+        const c = P(o.x, o.y, o.h * k0);
+        g.fillStyle = shade(base, f);
+        g.beginPath(); g.arc(c[0], c[1], o.r * zoom * k1, 0, 7); g.fill();
+      }
+      const hl = P(o.x, o.y, o.h * 0.95);
+      g.fillStyle = 'rgba(255,255,255,.14)';
+      g.beginPath(); g.arc(hl[0] - o.r * zoom * 0.3, hl[1] - o.r * zoom * 0.1, o.r * zoom * 0.3, 0, 7); g.fill();
+    }
+  }
+  function drawTyres(g, o) {
+    const rx = 7.5 * zoom, ry = rx * ISO;
+    for (let k = 0; k < 3; k++) {
+      const a = P(o.x, o.y, k * 4.5), b = P(o.x, o.y, k * 4.5 + 4.5);
+      g.fillStyle = k % 2 ? '#1c1c1c' : o.col;
+      g.beginPath(); g.ellipse(a[0], a[1], rx, ry, 0, 0, Math.PI); g.fill();
+      g.fillRect(a[0] - rx, b[1], rx * 2, a[1] - b[1]);
+      g.fillStyle = k % 2 ? '#2a2a2a' : shade(o.col === '#d32f2f' ? '#d32f2f' : '#f5f5f5', 0.1);
+      g.beginPath(); g.ellipse(b[0], b[1], rx, ry, 0, 0, 7); g.fill();
+    }
+    const t = P(o.x, o.y, 13.5);
+    g.fillStyle = '#111'; g.beginPath(); g.ellipse(t[0], t[1], rx * 0.45, ry * 0.45, 0, 0, 7); g.fill();
+  }
+  function drawCar(g, car) {
+    const ca = Math.cos(car.a), sa = Math.sin(car.a);
+    const L = (lx, ly) => [car.x + lx * ca - ly * sa, car.y + lx * sa + ly * ca];
+    const R = (x0, x1, y0, y1) => [L(x0, y0), L(x1, y0), L(x1, y1), L(x0, y1)];
+    g.fillStyle = 'rgba(0,0,0,.3)';
+    poly(g, R(-19, 19, -11, 11).map(p => P(p[0] + 6, p[1] + 2, 0)));
+    const body = { c: R(-18, 18, -9, 9), z0: 3, z1: 10, col: car.color };
+    const wheels = [[-14, -11.5], [6, -11.5], [-14, 8.5], [6, 8.5]].map(([x0, y0]) =>
+      ({ c: R(x0, x0 + 8, y0, y0 + 3), z0: 0, z1: 7, col: '#1a1a1a', top: '#2b2b2b' }));
+    const dOf = p => depth((p.c[0][0] + p.c[2][0]) / 2, (p.c[0][1] + p.c[2][1]) / 2);
+    const bd = dOf(body);
+    wheels.filter(w => dOf(w) <= bd).forEach(w => box(g, w));
+    box(g, body);
+    // bonnet stripe
+    g.fillStyle = 'rgba(255,255,255,.75)';
+    poly(g, R(6, 18, -2, 2).map(p => P(p[0], p[1], 10)));
+    poly(g, R(-18, -10, -2, 2).map(p => P(p[0], p[1], 10)));
+    // headlights on the nose when it faces the viewer
+    if (ca + sa > 0) {
+      g.fillStyle = '#fff59d';
+      for (const y0 of [-8, 4]) poly(g, [P(...L(18, y0), 5), P(...L(18, y0 + 4), 5), P(...L(18, y0 + 4), 8), P(...L(18, y0), 8)]);
+    }
+    wheels.filter(w => dOf(w) > bd).forEach(w => box(g, w));
+    const cabin = { c: R(-10, 5, -7.5, 7.5), z0: 10, z1: 17, col: '#2a4057', side: null, top: shade(car.color, 0.15) };
+    const wing = { c: R(-19, -15, -9.5, 9.5), z0: 13, z1: 15, col: '#222222' };
+    const upper = [cabin, wing].sort((a, b) => dOf(a) - dOf(b));
+    upper.forEach(p => box(g, p));
+    if (car.isPlayer && mode === 'race') {
+      // marker above the player's car
+      const m = P(car.x, car.y, 30 + Math.sin(performance.now() / 200) * 2);
+      g.fillStyle = '#ffcc33';
+      poly(g, [[m[0] - 6, m[1] - 8], [m[0] + 6, m[1] - 8], [m[0], m[1]]]);
+    }
   }
   function drawMinimap(g, x, y, size) {
-    const tr = race.track, b = tr.bounds, s = size / Math.max(b.x1 - b.x0, b.y1 - b.y0);
+    const tr = race.track;
+    const iso = p => [(p[0] - p[1]) * C, (p[0] + p[1]) * C * ISO];
+    if (!tr.mini) {
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      for (const p of tr.pts) { const q = iso(p); x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]); }
+      tr.mini = { x0, y0, x1, y1 };
+    }
+    const m = tr.mini, s = size / (m.x1 - m.x0), hgt = (m.y1 - m.y0) * s;
+    const map = p => { const q = iso(p); return [(q[0] - m.x0) * s, (q[1] - m.y0) * s]; };
     g.save(); g.translate(x, y);
-    g.fillStyle = 'rgba(0,0,0,.4)'; roundRect(g, -6, -6, size + 12, (b.y1 - b.y0) * s + 12, 8); g.fill();
-    g.strokeStyle = 'rgba(255,255,255,.8)'; g.lineWidth = 3; g.lineJoin = 'round';
+    g.fillStyle = 'rgba(0,0,0,.4)';
+    g.beginPath(); g.roundRect ? g.roundRect(-8, -8, size + 16, hgt + 16, 8) : g.rect(-8, -8, size + 16, hgt + 16); g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 3; g.lineJoin = 'round';
     g.beginPath();
-    tr.pts.forEach((p, i) => { const px = (p[0] - b.x0) * s, py = (p[1] - b.y0) * s; i ? g.lineTo(px, py) : g.moveTo(px, py); });
+    tr.pts.forEach((p, i) => { const q = map(p); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); });
     g.closePath(); g.stroke();
     for (const c of race.cars) {
+      const q = map([c.x, c.y]);
       g.fillStyle = c.color; g.strokeStyle = c.isPlayer ? '#fff' : 'rgba(0,0,0,.6)'; g.lineWidth = c.isPlayer ? 2 : 1;
-      g.beginPath(); g.arc((c.x - b.x0) * s, (c.y - b.y0) * s, c.isPlayer ? 4.5 : 3.5, 0, 7); g.fill(); g.stroke();
+      g.beginPath(); g.arc(q[0], q[1], c.isPlayer ? 4.5 : 3.5, 0, 7); g.fill(); g.stroke();
     }
     g.restore();
   }
@@ -580,28 +1135,50 @@ function standings(race) {
   function draw() {
     const g = ctx;
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
-    if (!race) {
-      // menu backdrop
-      g.fillStyle = '#24401f'; g.fillRect(0, 0, W, H);
-      return;
-    }
+    if (!race) return;
     const me = race.cars.find(c => c.isPlayer);
-    const zoom = clamp(Math.min(W, H) / 820, 0.5, 1.15);
-    const lx = me.x + me.vx * 0.45, ly = me.y + me.vy * 0.45;
+    zoom = clamp(Math.min(W, H * 1.4) / 760, 0.62, 1.35);
+    const lx = me.x + me.vx * 0.4, ly = me.y + me.vy * 0.4;
     cam.x += (lx - cam.x) * 0.08; cam.y += (ly - cam.y) * 0.08;
-    g.fillStyle = '#1f3d1a'; g.fillRect(0, 0, W, H);
+    if (GLR) {
+      GLR.render(race, cam, zoom, W, H, DPR, mode === 'race');
+      g.clearRect(0, 0, W, H);
+    } else drawWorld2D(g);
+    drawOverlay(g, me);
+  }
+  function drawWorld2D(g) {
+    g.fillStyle = '#2b5424'; g.fillRect(0, 0, W, H);
+
+    // ground plane
     g.save();
-    g.translate(W / 2, H / 2); g.scale(zoom, zoom); g.translate(-cam.x, -cam.y);
+    g.translate(W / 2, H / 2); g.scale(zoom, zoom * ISO); g.rotate(Math.PI / 4); g.translate(-cam.x, -cam.y);
     const b = race.track.bounds;
     g.drawImage(trackImg, b.x0, b.y0);
-    g.fillStyle = 'rgba(25,25,25,.22)';
+    g.fillStyle = 'rgba(25,25,25,.25)';
     for (const s of race.skids) g.fillRect(s[0] - 2, s[1] - 2, 4, 4);
-    for (const c of race.cars) drawCar(g, c);
     g.restore();
 
+    // depth-sorted objects
+    const items = [];
+    const vis = (x, y, pad) => { const s = P(x, y, 0); return s[0] > -pad && s[0] < W + pad && s[1] > -pad * 0.6 && s[1] < H + pad * 1.6; };
+    for (const o of scenery) {
+      if (!vis(o.x, o.y, o.big ? 400 : 120)) continue;
+      items.push({ d: depth(o.x, o.y), o });
+    }
+    for (const c of race.cars) if (vis(c.x, c.y, 80)) items.push({ d: depth(c.x, c.y), car: c });
+    items.sort((a, b2) => a.d - b2.d);
+    for (const it of items) {
+      if (it.car) drawCar(g, it.car);
+      else if (it.o.tree) drawTree(g, it.o);
+      else if (it.o.tyres) drawTyres(g, it.o);
+      else drawParts(g, it.o);
+    }
+    if (beam) drawParts(g, beam);
+  }
+  function drawOverlay(g, me) {
+    if (mode !== 'race') return;
     const mm = Math.min(150, W * 0.3);
-    drawMinimap(g, W - mm - 16, 62, mm);
-
+    drawMinimap(g, W - mm - 18, 66, mm);
     if (race.state === 'countdown') {
       const n = Math.ceil(race.cd - 0.2);
       bigText(n > 0 ? String(n) : 'GO!', n > 0 ? '#fff' : '#ffcc33');
@@ -620,8 +1197,8 @@ function standings(race) {
   }
   function smallText(t) {
     const g = ctx; g.save(); g.font = '800 22px system-ui, sans-serif'; g.textAlign = 'center';
-    g.lineWidth = 5; g.strokeStyle = 'rgba(0,0,0,.6)'; g.strokeText(t, W / 2, H * 0.22);
-    g.fillStyle = '#fff'; g.fillText(t, W / 2, H * 0.22); g.restore();
+    g.lineWidth = 5; g.strokeStyle = 'rgba(0,0,0,.6)'; g.strokeText(t, W / 2, H * 0.24);
+    g.fillStyle = '#fff'; g.fillText(t, W / 2, H * 0.24); g.restore();
   }
   function updateHud() {
     const me = race.cars.find(c => c.isPlayer), st = standings(race);
@@ -639,24 +1216,28 @@ function standings(race) {
   let last = performance.now(), accT = 0, hudT = 0;
   const STEP = 1 / 120;
   function frame(now) {
-    let dt = Math.min(0.05, (now - last) / 1000); last = now;
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
     if (race && !paused) {
       accT += dt;
-      const inp = playerInput();
+      const inp = mode === 'race' ? playerInput() : {};
       let n = 0;
       while (accT >= STEP && n < 12) { stepRace(race, STEP, inp); accT -= STEP; n++; }
       if (n === 12) accT = 0;
-      hudT -= dt;
-      if (hudT <= 0) { updateHud(); hudT = 0.1; }
-      if (race.state === 'done') {
-        resTimer += dt;
-        if (!resultsShown && resTimer > 1.6) { resultsShown = true; fillResults(); show('results', true); $('touch').style.display = 'none'; }
-        else if (resultsShown && Math.floor(resTimer * 2) !== Math.floor((resTimer - dt) * 2)) fillResults();
-      }
+      if (GLR && race.skids.length) { GLR.addSkids(race.skids); race.skids.length = 0; }
+      if (mode === 'race') {
+        hudT -= dt;
+        if (hudT <= 0) { updateHud(); hudT = 0.1; }
+        if (race.state === 'done') {
+          resTimer += dt;
+          if (!resultsShown && resTimer > 1.6) { resultsShown = true; fillResults(); show('results', true); $('touch').style.display = 'none'; }
+          else if (resultsShown && Math.floor(resTimer * 2) !== Math.floor((resTimer - dt) * 2)) fillResults();
+        }
+      } else if (race.t > 240) startDemo();
     }
     draw();
     requestAnimationFrame(frame);
   }
+  startDemo();
   requestAnimationFrame(frame);
 })();
 </script>
