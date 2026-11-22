@@ -7,7 +7,7 @@ It renders in 3D with WebGL (a hand-written renderer, no libraries) and falls ba
 **Play:** https://mariuspaukste.github.io/rally-rush/
 
 ## DOS player
-There's also a DOS emulator page at https://mariuspaukste.github.io/rally-rush/dos/ for playing your own copy of the original Race Mania (or any DOS game). Choose the game as a .zip and it runs in the browser with [js-dos](https://js-dos.com). The files stay on your device and can be kept there with your saves. No game files are included in this repo.
+There's also a DOS emulator page at https://mariuspaukste.github.io/rally-rush/dos/ for playing your own copy of the original Race Mania (or any DOS game). Choose the game as a .zip or .rar and it runs in the browser with [js-dos](https://js-dos.com). The files stay on your device and can be kept there with your saves. No game files are included in this repo.
 
 ## Features
 - **Career mode:** five leagues (Rookie Cup → Legends Cup) of four races each. Points decide the league table; finish in the top 3 to unlock the next league and win a season bonus.

@@ -51,9 +51,9 @@
   <div class="panel">
     <h1>DOS <span>PLAYER</span></h1>
     <p class="sub">Play your own copy of an old DOS game, such as Race Mania, in the browser. The game files stay on this device and are never uploaded anywhere.</p>
-    <label class="pick">Choose the game as a .zip
-      <small>Zip the game's folder first (or use a .jsdos bundle)</small>
-      <input type="file" id="zipIn" accept=".zip,.jsdos,application/zip">
+    <label class="pick">Choose the game as a .zip or .rar
+      <small>An archive of the game's folder (a .jsdos bundle works too)</small>
+      <input type="file" id="zipIn" accept=".zip,.rar,.jsdos,application/zip,application/vnd.rar,application/x-rar-compressed">
     </label>
     <label class="pick" id="dirPick" style="margin-top:8px">…or choose the game folder
       <small>Desktop browsers only</small>
@@ -131,7 +131,7 @@
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
     let e = -1;
     for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
-    if (e < 0) throw new Error('That file is not a zip archive.');
+    if (e < 0) throw new Error('That file isn\'t a .zip or .rar archive.');
     let n = dv.getUint16(e + 10, true), off = dv.getUint32(e + 16, true);
     if ((off === 0xffffffff || n === 0xffff) && e >= 20 && dv.getUint32(e - 20, true) === 0x07064b50) {
       const z = Number(dv.getBigUint64(e - 12, true));
@@ -169,13 +169,44 @@
     if (!g.progs.length && !g.bundle) info('No .exe, .com or .bat files found in ' + g.name + '.', true);
     else info(g.name + ' · ' + g.count + ' files');
   }
+  // RAR support: the unrar library is only downloaded when a .rar is chosen
+  const UNRAR = 'https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/';
+  async function unrar(buf) {
+    let m;
+    try { m = await import(UNRAR + '+esm'); } catch (e) { m = await import(UNRAR + 'esm/index.esm.js'); }
+    const wasm = await fetch(UNRAR + 'esm/js/unrar.wasm');
+    if (!wasm.ok) throw new Error('Could not download the RAR unpacker.');
+    const ex = await m.createExtractorFromData({ data: buf, wasmBinary: await wasm.arrayBuffer() });
+    const files = [];
+    for (const f of ex.extract().files) {
+      if (f.fileHeader.flags && f.fileHeader.flags.directory) continue;
+      if (!f.extraction) continue;
+      files.push({ path: f.fileHeader.name.replace(/\\/g, '/'), contents: f.extraction });
+    }
+    return files;
+  }
   $('zipIn').addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
     info('Reading ' + f.name + '…');
     try {
-      const zip = new Uint8Array(await f.arrayBuffer());
-      const names = zipNames(zip).filter(n => !n.endsWith('/'));
-      showGame({ name: f.name, kind: 'zip', zip, count: names.length, bundle: names.includes('.jsdos/dosbox.conf'), progs: programs(names) });
+      const buf = await f.arrayBuffer(), u8 = new Uint8Array(buf);
+      const isRar = u8[0] === 0x52 && u8[1] === 0x61 && u8[2] === 0x72 && u8[3] === 0x21; // "Rar!"
+      if (isRar) {
+        info('Unpacking ' + f.name + '…');
+        let files;
+        try { files = await unrar(buf); }
+        catch (err) {
+          const msg = String(err && err.message || err);
+          throw new Error(/volume|part/i.test(msg) ? 'This looks like one part of a multi-part RAR. Unpack it on a computer and zip the folder instead.'
+            : /password|encrypt/i.test(msg) ? 'This RAR is password-protected, which isn\'t supported.'
+            : 'Could not unpack the RAR: ' + msg);
+        }
+        if (!files.length) throw new Error('The RAR archive is empty.');
+        showGame({ name: f.name, kind: 'files', files, count: files.length, bundle: false, progs: programs(files.map(x => x.path)) });
+        return;
+      }
+      const names = zipNames(u8).filter(n => !n.endsWith('/'));
+      showGame({ name: f.name, kind: 'zip', zip: u8, count: names.length, bundle: names.includes('.jsdos/dosbox.conf'), progs: programs(names) });
     } catch (err) { info(err.message || String(err), true); }
   });
   $('dirIn').addEventListener('change', async e => {
