@@ -71,6 +71,12 @@
         <option value="fixed 15000">486 (15000 cycles)</option>
         <option value="fixed 6000">386 (6000 cycles)</option>
       </select>
+      <div class="label">CD drive</div>
+      <select id="cd"></select>
+      <div class="sub" style="margin:6px 0 0">If the game asks you to insert its CD, pick the drive letter it mentions.</div>
+      <div class="label">CD label (optional)</div>
+      <input id="cdLabel" maxlength="11" placeholder="e.g. RACEMANIA" autocapitalize="characters"
+        style="width:100%;background:#29372c;color:#fff;border:1px solid #3a4c3e;border-radius:9px;padding:10px;font-size:14px;font-family:inherit">
       <label class="check"><input type="checkbox" id="keep" checked> Keep this game and its saves on this device</label>
       <button class="btn" id="play">Play</button>
     </div>
@@ -165,6 +171,14 @@
     for (const p of g.progs) { const o = document.createElement('option'); o.value = p; o.textContent = p; sel.appendChild(o); }
     if (g.exe && [...sel.options].some(o => o.value === g.exe)) sel.value = g.exe;
     if (g.cycles) $('cycles').value = g.cycles;
+    const imgs = (g.paths || []).filter(n => /\.(cue|iso)$/i.test(n)).sort((a, b) => /\.cue$/i.test(b) - /\.cue$/i.test(a));
+    const cd = $('cd');
+    cd.innerHTML = '<option value="">No CD drive</option>' +
+      '<option value="dirD">Game folder as a CD on D:</option>' +
+      '<option value="dirC">Game folder as a CD on C: (read-only)</option>' +
+      imgs.map(n => '<option value="img:' + n.replace(/"/g, '') + '">' + n.split('/').pop().replace(/</g, '&lt;') + ' as a CD on D:</option>').join('');
+    cd.value = g.cd != null && [...cd.options].some(o => o.value === g.cd) ? g.cd : imgs.length ? 'img:' + imgs[0] : '';
+    $('cdLabel').value = g.label || '';
     $('opts').style.display = (g.progs.length || g.bundle) ? 'block' : 'none';
     if (!g.progs.length && !g.bundle) info('No .exe, .com or .bat files found in ' + g.name + '.', true);
     else info(g.name + ' · ' + g.count + ' files');
@@ -202,11 +216,12 @@
             : 'Could not unpack the RAR: ' + msg);
         }
         if (!files.length) throw new Error('The RAR archive is empty.');
-        showGame({ name: f.name, kind: 'files', files, count: files.length, bundle: false, progs: programs(files.map(x => x.path)) });
+        const paths = files.map(x => x.path);
+        showGame({ name: f.name, kind: 'files', files, count: files.length, bundle: false, paths, progs: programs(paths) });
         return;
       }
       const names = zipNames(u8).filter(n => !n.endsWith('/'));
-      showGame({ name: f.name, kind: 'zip', zip: u8, count: names.length, bundle: names.includes('.jsdos/dosbox.conf'), progs: programs(names) });
+      showGame({ name: f.name, kind: 'zip', zip: u8, count: names.length, bundle: names.includes('.jsdos/dosbox.conf'), paths: names, progs: programs(names) });
     } catch (err) { info(err.message || String(err), true); }
   });
   $('dirIn').addEventListener('change', async e => {
@@ -215,29 +230,40 @@
     const files = [];
     for (const f of list) files.push({ path: f.webkitRelativePath || f.name, contents: new Uint8Array(await f.arrayBuffer()) });
     const top = files[0].path.split('/')[0];
-    showGame({ name: top || 'folder', kind: 'files', files, count: files.length, bundle: false, progs: programs(files.map(x => x.path)) });
+    const paths = files.map(x => x.path);
+    showGame({ name: top || 'folder', kind: 'files', files, count: files.length, bundle: false, paths, progs: programs(paths) });
   });
 
   // ---------- running ----------
   let props = null, ci = null, running = null;
-  function dosboxConf(exe, cycles) {
+  function dosboxConf(exe, cycles, cd, label) {
     const parts = exe.split('/'), prog = parts.pop(), dir = parts.join('/');
+    const where = dir ? '"./' + dir + '"' : '.';
+    const lab = (label || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 11);
+    const cdOpts = ' -t cdrom' + (lab ? ' -label ' + lab : '');
+    const mounts = [];
+    if (cd === 'dirC') mounts.push('mount c ' + where + cdOpts);
+    else {
+      mounts.push('mount c ' + where);
+      if (cd === 'dirD') mounts.push('mount d ' + where + cdOpts);
+      else if (cd && cd.startsWith('img:')) mounts.push('imgmount d "./' + cd.slice(4) + '" -t iso');
+    }
     return [
       '[sdl]', 'autolock=false', '',
       '[dosbox]', 'memsize=16', '',
       '[cpu]', 'core=auto', 'cputype=auto', 'cycles=' + cycles, '',
       '[autoexec]', '@echo off',
-      dir ? 'mount c "./' + dir + '"' : 'mount c .',
+      ...mounts,
       'c:', prog, '',
     ].join('\n');
   }
   const changesKey = g => 'changes:' + g.name;
   async function play(g, keep) {
-    const exe = $('exe').value, cycles = $('cycles').value;
-    g.exe = exe; g.cycles = cycles;
+    const exe = $('exe').value, cycles = $('cycles').value, cd = $('cd').value, label = $('cdLabel').value.trim();
+    g.exe = exe; g.cycles = cycles; g.cd = cd; g.label = label;
     if (keep) {
       info('Saving the game on this device…');
-      await kvSet('game', { name: g.name, kind: g.kind, zip: g.zip, files: g.files, count: g.count, bundle: g.bundle, progs: g.progs, exe, cycles });
+      await kvSet('game', { name: g.name, kind: g.kind, zip: g.zip, files: g.files, count: g.count, bundle: g.bundle, paths: g.paths, progs: g.progs, exe, cycles, cd, label });
     }
     const initFs = [];
     if (g.kind === 'zip') initFs.push(g.zip); else for (const f of g.files) initFs.push({ path: f.path, contents: f.contents });
@@ -248,7 +274,7 @@
     if (g.bundle && !exe) {
       opts.url = URL.createObjectURL(new Blob([g.zip], { type: 'application/zip' }));
       opts.initFs = changes ? [new Uint8Array(changes)] : undefined;
-    } else opts.dosboxConf = dosboxConf(exe, cycles);
+    } else opts.dosboxConf = dosboxConf(exe, cycles, cd, label);
     running = { g, keep };
     $('setup').style.display = 'none';
     $('player').classList.add('show');
@@ -288,16 +314,18 @@
   async function refreshSaved() {
     const g = await kvGet('game');
     $('saved').style.display = g ? 'block' : 'none';
-    if (g) $('playSaved').textContent = 'Play ' + g.name + (g.exe ? ' (' + g.exe.split('/').pop() + ')' : '');
+    if (g) $('playSaved').textContent = 'Open ' + g.name;
     return g;
   }
   $('playSaved').onclick = async () => {
     const g = await kvGet('game');
     if (!g) return refreshSaved();
     if (g.zip && !(g.zip instanceof Uint8Array)) g.zip = new Uint8Array(g.zip);
+    if (!g.paths) g.paths = g.files ? g.files.map(f => f.path) : g.zip ? zipNames(g.zip) : [];
     showGame(g);
-    $('exe').value = g.exe || $('exe').value; $('cycles').value = g.cycles || 'auto';
-    play(g, true);
+    $('keep').checked = true;
+    info(g.name + ' loaded. Check the settings below, then press Play.');
+    $('opts').scrollIntoView({ behavior: 'smooth' });
   };
   let forgetArm = 0;
   $('forget').onclick = async () => {
