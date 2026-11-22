@@ -4,7 +4,7 @@ An original top-down off-road racing game for the browser, in the spirit of mid-
 
 It renders in 3D with WebGL (a hand-written renderer, no libraries) and falls back to a 2D canvas on devices without WebGL (or add `?2d` to the URL). It's a single HTML file with no build step and no dependencies.
 
-**Play:** https://mariuspaukste.github.io/race-mania/
+**Play:** https://mariuspaukste.github.io/rally-rush/
 
 ## Features
 - **Career mode:** five leagues (Rookie Cup → Legends Cup) of four races each. Points decide the league table; finish in the top 3 to unlock the next league and win a season bonus.
