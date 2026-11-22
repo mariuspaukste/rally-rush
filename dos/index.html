@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>DOS Player</title>
+<link rel="stylesheet" href="https://v8.js-dos.com/latest/js-dos.css">
+<script src="https://v8.js-dos.com/latest/js-dos.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #111614; color: #fff; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #setup { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .panel { background: #1f2a22; border: 1px solid #3a4c3e; border-radius: 16px; padding: 20px; width: min(100%, 460px); box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  h1 { margin: 0 0 4px; font-size: 28px; font-style: italic; font-weight: 900; }
+  h1 span { color: #ffcc33; }
+  .sub { color: #a9b8ab; font-size: 13px; line-height: 1.5; margin: 0 0 12px; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #a9b8ab; margin: 14px 0 6px; }
+  .pick { display: block; border: 2px dashed #3a4c3e; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; background: #243028; font-weight: 700; }
+  .pick small { display: block; color: #a9b8ab; font-weight: 400; margin-top: 4px; }
+  .pick input { display: none; }
+  .row { display: flex; gap: 8px; margin-top: 8px; }
+  select { width: 100%; background: #29372c; color: #fff; border: 1px solid #3a4c3e; border-radius: 9px; padding: 10px; font-size: 14px; font-family: inherit; }
+  .btn { display: block; width: 100%; margin-top: 10px; padding: 13px; border: 0; border-radius: 11px; background: #ffcc33; color: #1a1a1a; font-size: 17px; font-weight: 800; cursor: pointer; font-family: inherit; }
+  .btn.alt { background: #29372c; color: #fff; border: 1px solid #3a4c3e; font-size: 14px; padding: 10px; }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 14px; margin-top: 12px; }
+  #info { font-size: 13px; color: #cfd8d0; margin-top: 10px; min-height: 18px; }
+  #info.err { color: #ff8a80; }
+  .keys { color: #a9b8ab; font-size: 12px; margin-top: 14px; line-height: 1.5; }
+  a { color: #ffcc33; }
+  #player { position: fixed; inset: 0; display: none; background: #000; }
+  #player.show { display: block; }
+  #dos { position: absolute; inset: 0; }
+  #bar { position: absolute; top: 8px; right: 8px; z-index: 30; display: flex; gap: 6px; }
+  #bar button { height: 36px; padding: 0 12px; border-radius: 9px; border: 0; background: rgba(0,0,0,.55); color: #fff; font-weight: 700; font-size: 13px; cursor: pointer; }
+  #touch { position: absolute; left: 0; right: 0; bottom: 0; z-index: 20; display: none; justify-content: space-between; align-items: flex-end;
+    padding: 0 12px calc(12px + env(safe-area-inset-bottom)); pointer-events: none; }
+  #touch.show { display: flex; }
+  .pad { display: grid; gap: 8px; pointer-events: auto; }
+  .dpad { grid-template-columns: repeat(3, 62px); grid-template-rows: repeat(3, 62px); }
+  .acts { grid-template-columns: repeat(3, 66px); }
+  .k { display: flex; align-items: center; justify-content: center; border-radius: 14px; background: rgba(255,255,255,.16);
+    border: 2px solid rgba(255,255,255,.3); color: #fff; font-weight: 800; font-size: 15px; user-select: none; -webkit-user-select: none; touch-action: none; }
+  .k.big { font-size: 24px; }
+  .k.on { background: rgba(255,204,51,.55); }
+  .acts .k { height: 54px; }
+</style>
+</head>
+<body>
+<div id="setup">
+  <div class="panel">
+    <h1>DOS <span>PLAYER</span></h1>
+    <p class="sub">Play your own copy of an old DOS game, such as Race Mania, in the browser. The game files stay on this device and are never uploaded anywhere.</p>
+    <label class="pick">Choose the game as a .zip
+      <small>Zip the game's folder first (or use a .jsdos bundle)</small>
+      <input type="file" id="zipIn" accept=".zip,.jsdos,application/zip">
+    </label>
+    <label class="pick" id="dirPick" style="margin-top:8px">…or choose the game folder
+      <small>Desktop browsers only</small>
+      <input type="file" id="dirIn" webkitdirectory multiple>
+    </label>
+    <div id="info"></div>
+    <div id="opts" style="display:none">
+      <div class="label">Program to start</div>
+      <select id="exe"></select>
+      <div class="label">Speed</div>
+      <select id="cycles">
+        <option value="auto">Auto</option>
+        <option value="max">Fastest</option>
+        <option value="fixed 30000">Pentium (30000 cycles)</option>
+        <option value="fixed 15000">486 (15000 cycles)</option>
+        <option value="fixed 6000">386 (6000 cycles)</option>
+      </select>
+      <label class="check"><input type="checkbox" id="keep" checked> Keep this game and its saves on this device</label>
+      <button class="btn" id="play">Play</button>
+    </div>
+    <div id="saved" style="display:none">
+      <div class="label">Saved on this device</div>
+      <button class="btn" id="playSaved">Play</button>
+      <button class="btn alt" id="forget">Remove saved game</button>
+    </div>
+    <div class="keys">Race Mania keys: arrows to drive, Ctrl or Alt to attack, Space or Enter for action, Esc for the menu.
+      On a phone, on-screen buttons appear; turn the phone sideways for a bigger picture.<br>
+      Uses <a href="https://js-dos.com" target="_blank" rel="noopener">js-dos</a> (DOSBox). <a href="../">Back to Rally Rush</a></div>
+  </div>
+</div>
+
+<div id="player">
+  <div id="dos"></div>
+  <div id="bar"><button id="saveBtn">Save</button><button id="quitBtn">Quit</button></div>
+  <div id="touch">
+    <div class="pad dpad">
+      <div></div><div class="k big" data-key="265">▲</div><div></div>
+      <div class="k big" data-key="263">◀</div><div></div><div class="k big" data-key="262">▶</div>
+      <div></div><div class="k big" data-key="264">▼</div><div></div>
+    </div>
+    <div class="pad acts">
+      <div class="k" data-key="256">Esc</div><div class="k" data-key="89">Y</div><div class="k" data-key="78">N</div>
+      <div class="k" data-key="342">Alt</div><div class="k" data-key="341">Ctrl</div><div class="k" data-key="257">Enter</div>
+      <div></div><div></div><div class="k" data-key="32">Space</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const info = (t, err) => { $('info').textContent = t; $('info').className = err ? 'err' : ''; };
+  const isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+  if (isTouch) $('dirPick').style.display = 'none';
+
+  // ---------- small IndexedDB key-value store ----------
+  const db = new Promise((res, rej) => {
+    try {
+      const r = indexedDB.open('dos-player', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    } catch (e) { rej(e); }
+  });
+  const kv = (mode, fn) => db.then(d => new Promise((res, rej) => {
+    const t = d.transaction('kv', mode), s = t.objectStore('kv'), r = fn(s);
+    t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error);
+  }));
+  const kvGet = k => kv('readonly', s => s.get(k)).catch(() => null);
+  const kvSet = (k, v) => kv('readwrite', s => s.put(v, k)).catch(e => console.warn('save failed', e));
+  const kvDel = k => kv('readwrite', s => s.delete(k)).catch(() => {});
+
+  // ---------- reading the game ----------
+  // Lists the file names in a zip from its central directory (no unpacking needed).
+  function zipNames(u8) {
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    let e = -1;
+    for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+    if (e < 0) throw new Error('That file is not a zip archive.');
+    let n = dv.getUint16(e + 10, true), off = dv.getUint32(e + 16, true);
+    if ((off === 0xffffffff || n === 0xffff) && e >= 20 && dv.getUint32(e - 20, true) === 0x07064b50) {
+      const z = Number(dv.getBigUint64(e - 12, true));
+      n = Number(dv.getBigUint64(z + 32, true)); off = Number(dv.getBigUint64(z + 48, true));
+    }
+    const names = [], utf8 = new TextDecoder('utf-8');
+    for (let k = 0; k < n && off + 46 <= u8.length; k++) {
+      if (dv.getUint32(off, true) !== 0x02014b50) break;
+      const fl = dv.getUint16(off + 28, true), el = dv.getUint16(off + 30, true), cl = dv.getUint16(off + 32, true);
+      names.push(utf8.decode(u8.subarray(off + 46, off + 46 + fl)));
+      off += 46 + fl + el + cl;
+    }
+    return names;
+  }
+  const SKIP = /(setup|install|instal|config|setsound|sndsetup|uninst|readme|dos4gw|pmode|cwsdpmi)/i;
+  function programs(names) {
+    return names.filter(n => /\.(exe|com|bat)$/i.test(n) && !n.startsWith('.jsdos/'))
+      .sort((a, b) => score(a) - score(b) || a.length - b.length || a.localeCompare(b));
+  }
+  function score(n) {
+    const base = n.split('/').pop();
+    return (SKIP.test(base) ? 10 : 0) + (/race|mania|rm/i.test(base) ? -5 : 0) + (/\.exe$/i.test(n) ? 0 : 1) + n.split('/').length;
+  }
+
+  let game = null; // { name, kind: 'zip' | 'files', zip?: Uint8Array, files?: [{path, contents}], bundle: bool, progs: [] }
+  function showGame(g) {
+    game = g;
+    const sel = $('exe');
+    sel.innerHTML = '';
+    if (g.bundle) sel.innerHTML = '<option value="">Use the bundle\'s own settings</option>';
+    for (const p of g.progs) { const o = document.createElement('option'); o.value = p; o.textContent = p; sel.appendChild(o); }
+    if (g.exe && [...sel.options].some(o => o.value === g.exe)) sel.value = g.exe;
+    if (g.cycles) $('cycles').value = g.cycles;
+    $('opts').style.display = (g.progs.length || g.bundle) ? 'block' : 'none';
+    if (!g.progs.length && !g.bundle) info('No .exe, .com or .bat files found in ' + g.name + '.', true);
+    else info(g.name + ' · ' + g.count + ' files');
+  }
+  $('zipIn').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    info('Reading ' + f.name + '…');
+    try {
+      const zip = new Uint8Array(await f.arrayBuffer());
+      const names = zipNames(zip).filter(n => !n.endsWith('/'));
+      showGame({ name: f.name, kind: 'zip', zip, count: names.length, bundle: names.includes('.jsdos/dosbox.conf'), progs: programs(names) });
+    } catch (err) { info(err.message || String(err), true); }
+  });
+  $('dirIn').addEventListener('change', async e => {
+    const list = [...e.target.files]; if (!list.length) return;
+    info('Reading ' + list.length + ' files…');
+    const files = [];
+    for (const f of list) files.push({ path: f.webkitRelativePath || f.name, contents: new Uint8Array(await f.arrayBuffer()) });
+    const top = files[0].path.split('/')[0];
+    showGame({ name: top || 'folder', kind: 'files', files, count: files.length, bundle: false, progs: programs(files.map(x => x.path)) });
+  });
+
+  // ---------- running ----------
+  let props = null, ci = null, running = null;
+  function dosboxConf(exe, cycles) {
+    const parts = exe.split('/'), prog = parts.pop(), dir = parts.join('/');
+    return [
+      '[sdl]', 'autolock=false', '',
+      '[dosbox]', 'memsize=16', '',
+      '[cpu]', 'core=auto', 'cputype=auto', 'cycles=' + cycles, '',
+      '[autoexec]', '@echo off',
+      dir ? 'mount c "./' + dir + '"' : 'mount c .',
+      'c:', prog, '',
+    ].join('\n');
+  }
+  const changesKey = g => 'changes:' + g.name;
+  async function play(g, keep) {
+    const exe = $('exe').value, cycles = $('cycles').value;
+    g.exe = exe; g.cycles = cycles;
+    if (keep) {
+      info('Saving the game on this device…');
+      await kvSet('game', { name: g.name, kind: g.kind, zip: g.zip, files: g.files, count: g.count, bundle: g.bundle, progs: g.progs, exe, cycles });
+    }
+    const initFs = [];
+    if (g.kind === 'zip') initFs.push(g.zip); else for (const f of g.files) initFs.push({ path: f.path, contents: f.contents });
+    const changes = keep ? await kvGet(changesKey(g)) : null;
+    if (changes) initFs.push(new Uint8Array(changes));
+    const opts = { autoStart: true, kiosk: false, initFs, theme: 'dark',
+      onEvent: (ev, c) => { if (ev === 'ci-ready') ci = c; } };
+    if (g.bundle && !exe) {
+      opts.url = URL.createObjectURL(new Blob([g.zip], { type: 'application/zip' }));
+      opts.initFs = changes ? [new Uint8Array(changes)] : undefined;
+    } else opts.dosboxConf = dosboxConf(exe, cycles);
+    running = { g, keep };
+    $('setup').style.display = 'none';
+    $('player').classList.add('show');
+    $('touch').classList.toggle('show', isTouch);
+    $('saveBtn').style.display = keep ? '' : 'none';
+    const el = document.createElement('div'); el.style.cssText = 'position:absolute;inset:0';
+    $('dos').innerHTML = ''; $('dos').appendChild(el);
+    try { props = Dos(el, opts); }
+    catch (err) { quit(); info('Could not start the emulator: ' + (err.message || err), true); }
+  }
+  async function saveChanges() {
+    if (!ci || !running || !running.keep || typeof ci.persist !== 'function') return false;
+    try {
+      const data = await ci.persist(true);
+      if (data && data.length) { await kvSet(changesKey(running.g), data); return true; }
+    } catch (e) { console.warn('persist failed', e); }
+    return false;
+  }
+  async function quit() {
+    await saveChanges();
+    try { if (props) props.stop(); } catch (e) {}
+    props = null; ci = null; running = null;
+    $('dos').innerHTML = '';
+    $('player').classList.remove('show');
+    $('setup').style.display = '';
+    refreshSaved();
+  }
+  $('play').onclick = () => game && play(game, $('keep').checked);
+  $('quitBtn').onclick = quit;
+  $('saveBtn').onclick = async () => {
+    const b = $('saveBtn'), ok = await saveChanges();
+    b.textContent = ok ? 'Saved ✓' : 'Nothing to save';
+    setTimeout(() => { b.textContent = 'Save'; }, 1500);
+  };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveChanges(); });
+
+  async function refreshSaved() {
+    const g = await kvGet('game');
+    $('saved').style.display = g ? 'block' : 'none';
+    if (g) $('playSaved').textContent = 'Play ' + g.name + (g.exe ? ' (' + g.exe.split('/').pop() + ')' : '');
+    return g;
+  }
+  $('playSaved').onclick = async () => {
+    const g = await kvGet('game');
+    if (!g) return refreshSaved();
+    if (g.zip && !(g.zip instanceof Uint8Array)) g.zip = new Uint8Array(g.zip);
+    showGame(g);
+    $('exe').value = g.exe || $('exe').value; $('cycles').value = g.cycles || 'auto';
+    play(g, true);
+  };
+  let forgetArm = 0;
+  $('forget').onclick = async () => {
+    if (forgetArm < Date.now()) { forgetArm = Date.now() + 3000; $('forget').textContent = 'Tap again to remove it and its saves'; setTimeout(() => { $('forget').textContent = 'Remove saved game'; }, 3000); return; }
+    const g = await kvGet('game');
+    if (g) await kvDel(changesKey(g));
+    await kvDel('game');
+    $('forget').textContent = 'Remove saved game';
+    refreshSaved();
+  };
+
+  // ---------- on-screen buttons for phones ----------
+  document.querySelectorAll('#touch .k').forEach(btn => {
+    const code = +btn.dataset.key, ids = new Set();
+    const set = on => { btn.classList.toggle('on', on); if (ci) ci.sendKeyEvent(code, on); };
+    btn.addEventListener('pointerdown', e => { e.preventDefault(); if (!ids.size) set(true); ids.add(e.pointerId); try { btn.setPointerCapture(e.pointerId); } catch (x) {} });
+    const end = e => { if (!ids.delete(e.pointerId)) return; if (!ids.size) set(false); };
+    btn.addEventListener('pointerup', end); btn.addEventListener('pointercancel', end); btn.addEventListener('lostpointercapture', end);
+  });
+  document.addEventListener('contextmenu', e => { if (running) e.preventDefault(); });
+
+  if (typeof Dos !== 'function') info('The emulator did not load. Check your internet connection and reload the page.', true);
+  refreshSaved();
+})();
+</script>
+</body>
+</html>
