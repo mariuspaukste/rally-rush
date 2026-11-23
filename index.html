@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Rally Rush</title>
 <style>
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
   html, body {
     margin: 0; height: 100%; overflow: hidden; background: #24401f; color: #fff;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -94,7 +94,7 @@
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
   #touch { position: fixed; inset: auto 0 0 0; z-index: 3; display: none; pointer-events: none;
     padding: 0 14px calc(14px + env(safe-area-inset-bottom)); justify-content: space-between; }
-  #touch .grp { display: flex; gap: 12px; pointer-events: auto; }
+  #touch .grp { display: flex; gap: 12px; pointer-events: auto; touch-action: none; }
   .tbtn {
     width: 74px; height: 74px; border-radius: 50%; background: rgba(255,255,255,.18);
     border: 2px solid rgba(255,255,255,.35); display: flex; align-items: center; justify-content: center;
@@ -1456,6 +1456,15 @@ function standings(race) {
     btn.addEventListener('pointerup', end); btn.addEventListener('pointercancel', end); btn.addEventListener('lostpointercapture', end);
   });
   document.addEventListener('contextmenu', e => e.preventDefault());
+  // Stop the browser zooming while driving. iOS Safari ignores user-scalable=no and
+  // touch-action alone isn't enough there, so cancel the native touch gestures on the
+  // control pad (pointer events still fire, so the buttons keep working).
+  const stopTouch = e => { if (e.cancelable) e.preventDefault(); };
+  for (const t of ['touchstart', 'touchmove', 'touchend']) $('touch').addEventListener(t, stopTouch, { passive: false });
+  // Pinch anywhere (e.g. two thumbs landing as the race starts) and double-tap zoom.
+  document.addEventListener('touchmove', e => { if (e.touches.length > 1 && e.cancelable) e.preventDefault(); }, { passive: false });
+  for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(t, e => e.preventDefault());
+  document.addEventListener('dblclick', e => e.preventDefault());
   function playerInput() {
     const left = keys['arrowleft'] || keys['a'] || touchState.left;
     const right = keys['arrowright'] || keys['d'] || touchState.right;
